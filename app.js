@@ -44,8 +44,7 @@ const usePeer = (userPhone, onData, onConn, onCall, onError) => {
     useEffect(() => {
         if (!userPhone) return;
 
-        // Generate consistent Peer ID from phone number
-        // Removes non-digits and adds prefix. Ex: eind-9876543210
+        // Clean ID logic: eind-9876543210
         const cleanId = "eind-" + userPhone.replace(/\D/g, ''); 
         
         const p = new Peer(cleanId, { debug: 1, config: { iceServers: [{ url: 'stun:stun.l.google.com:19302' }] } });
@@ -54,7 +53,7 @@ const usePeer = (userPhone, onData, onConn, onCall, onError) => {
         p.on('connection', (c) => setupConn(c));
         p.on('call', (c) => onCall && onCall(c));
         p.on('error', (e) => { 
-            setStatus(e.type === 'unavailable-id' ? "ID Taken (Active elsewhere)" : "Error"); 
+            setStatus(e.type === 'unavailable-id' ? "ID Taken (Check Tabs)" : "Error"); 
             if(onError) onError(e.type); 
         });
         p.on('disconnected', () => { setStatus("Reconnecting..."); p.reconnect(); });
@@ -80,65 +79,51 @@ const usePeer = (userPhone, onData, onConn, onCall, onError) => {
     return { myPeerId, connect, send, call, status };
 };
 
-// --- Login Component (Connected to YOUR Server) ---
+// --- Login Component ---
 const LoginScreen = ({ onLogin }) => {
     const [step, setStep] = useState(1);
     const [phone, setPhone] = useState("");
     const [otp, setOtp] = useState("");
     const [loading, setLoading] = useState(false);
-    const [errorMsg, setErrorMsg] = useState("");
 
-    // API URL pointing to your Node.js server
-    const API_BASE = "http://127.0.0.1:5000/api";
-
-    const handleSendOTP = async () => {
-        if(phone.length < 10) return setErrorMsg("Invalid phone number");
-        setLoading(true);
-        setErrorMsg("");
-        
+    // Generic API helper
+    const apiRequest = async (endpoint, body) => {
         try {
-            const res = await fetch(`${API_BASE}/login`, {
+            const res = await fetch(`http://localhost:5000/api/${endpoint}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phone })
+                body: JSON.stringify(body)
             });
-            const data = await res.json();
-            
-            if(data.success) {
-                setStep(2);
-                alert("OTP Sent! Check your Server Terminal (Black Screen).");
-            } else {
-                setErrorMsg(data.message);
-            }
+            return await res.json();
         } catch(e) {
-            console.error(e);
-            setErrorMsg("Server Error: Is 'node server.js' running?");
+            return { success: false, message: "Server connection failed. Start server.js" };
         }
+    };
+
+    const handleSendOTP = async () => {
+        if(phone.length < 10) return alert("Enter valid mobile number");
+        setLoading(true);
+        const data = await apiRequest('login', { phone });
         setLoading(false);
+        
+        if(data.success) {
+            setStep(2);
+            alert("OTP Sent! Check the Black Server Console screen.");
+        } else {
+            alert(data.message);
+        }
     };
 
     const handleVerify = async () => {
         setLoading(true);
-        setErrorMsg("");
-        
-        try {
-            const res = await fetch(`${API_BASE}/verify`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phone, otp })
-            });
-            const data = await res.json();
-
-            if(data.success) {
-                // Success! Pass user object up
-                onLogin(data.user);
-            } else {
-                setErrorMsg(data.message);
-            }
-        } catch(e) {
-            setErrorMsg("Verification Failed. Server issue?");
-        }
+        const data = await apiRequest('verify', { phone, otp });
         setLoading(false);
+
+        if(data.success) {
+            onLogin(data.user);
+        } else {
+            alert(data.message);
+        }
     };
 
     return (
@@ -148,14 +133,12 @@ const LoginScreen = ({ onLogin }) => {
                     <div className="w-16 h-16 bg-teal-600 rounded-full flex items-center justify-center text-3xl">🔒</div>
                 </div>
                 <h2 className="text-2xl font-bold text-center mb-2">Eind Login</h2>
-                <p className="text-gray-400 text-center text-sm mb-6">Login via Local Server</p>
-
-                {errorMsg && <div className="bg-red-500/20 text-red-300 p-2 rounded text-sm text-center mb-4 border border-red-500">{errorMsg}</div>}
+                <p className="text-gray-400 text-center text-sm mb-6">Your chats stay on this device.</p>
 
                 {step === 1 ? (
                     <>
                         <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Mobile Number" className="w-full bg-gray-700 border border-gray-600 p-3 rounded mb-4 focus:border-teal-500 outline-none" type="tel" />
-                        <button onClick={handleSendOTP} disabled={loading} className="w-full bg-teal-600 hover:bg-teal-700 py-3 rounded font-bold transition">{loading ? "Connecting..." : "Get OTP"}</button>
+                        <button onClick={handleSendOTP} disabled={loading} className="w-full bg-teal-600 hover:bg-teal-700 py-3 rounded font-bold transition">{loading ? "Sending..." : "Get OTP"}</button>
                     </>
                 ) : (
                     <>
@@ -212,8 +195,9 @@ const App = () => {
 
     // --- Actions ---
     const handleLogout = () => {
-        if(confirm("Logout? Your local chats will remain, but you need to login again.")) {
+        if(confirm("Logout? Your chats will remain on this browser.")) {
             setUser(null);
+            // We do NOT clear chats on logout to persist data
             window.location.reload(); 
         }
     };
@@ -258,8 +242,10 @@ const App = () => {
             const msg = { id: Date.now(), type: d.type||'text', content: d.content||d.text, sender: 'them', time: Date.now() };
             
             if(ex) {
+                // Update existing chat
                 return [{...ex, messages:[...ex.messages, msg], lastMsg: d.type==='text'?d.text:'Media', time: Date.now(), unread: activeChat===id?0:ex.unread+1}, ...prev.filter(c=>c.id!==id)];
             }
+            // Create new chat for unknown caller
             return [{id, name:`User ${id.replace('eind-','')}`, avatar:'👤', lastMsg: d.type==='text'?d.text:'Media', time: Date.now(), unread:1, isP2P:true, messages:[msg]}, ...prev];
         });
     };
@@ -307,7 +293,7 @@ const App = () => {
 
         const chat = chats.find(c => c.id === activeChat);
         if(chat.isP2P) {
-            if(!peerControls.send(activeChat, {type, content:txt, fileName:file, text:txt})) notify("Saved locally");
+            if(!peerControls.send(activeChat, {type, content:txt, fileName:file, text:txt})) notify("Saved (User Offline)");
             return;
         }
 
@@ -321,9 +307,7 @@ const App = () => {
         }
     };
 
-    if (!user) {
-        return <LoginScreen onLogin={setUser} />;
-    }
+    if (!user) return <LoginScreen onLogin={setUser} />;
 
     return (
         <div className="flex h-full w-full bg-app-dark overflow-hidden font-sans text-gray-100 relative">
@@ -331,8 +315,9 @@ const App = () => {
             
             {incomingCall && <div className="fixed inset-0 bg-black/90 z-[70] flex items-center justify-center p-4"><div className="bg-app-panel p-6 rounded-2xl flex flex-col items-center w-full max-w-sm"><div className="text-4xl animate-bounce mb-4">📞</div><h2 className="text-xl mb-4 text-center">Incoming Call...</h2><div className="flex gap-8"><button onClick={()=>setIncomingCall(null)} className="bg-red-500 p-4 rounded-full"><Icon name="phone-slash" size={32} weight="fill"/></button><button onClick={answerCall} className="bg-green-500 p-4 rounded-full"><Icon name="phone" size={32} weight="fill"/></button></div></div></div>}
             {activeCall && <div className="fixed inset-0 bg-black z-[70] flex flex-col"><div className="flex-1 relative flex items-center justify-center">{remoteStream?<VideoPlayer stream={remoteStream} isLocal={false}/>:<div className="animate-pulse">Connecting...</div>}<div className="absolute bottom-4 right-4 w-28 h-40 bg-gray-800 rounded border border-gray-600"><VideoPlayer stream={localStream} isLocal={true}/></div></div><div className="h-20 flex items-center justify-center bg-gray-900 pb-safe"><button onClick={endCall} className="bg-red-600 p-4 rounded-full"><Icon name="phone-slash" size={32} weight="fill"/></button></div></div>}
-            
-            {addFriendModal && <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4"><div className="bg-app-panel p-6 rounded-xl w-full max-w-sm relative"><button onClick={()=>setAddFriendModal(false)} className="absolute top-3 right-3"><Icon name="x" size={24}/></button><h3 className="text-lg font-bold mb-4">Add New Contact</h3><input value={friendPhone} onChange={e=>setFriendPhone(e.target.value)} placeholder="Phone Number" className="w-full bg-gray-700 p-3 rounded mb-4 outline-none" type="tel"/><button onClick={handleAddFriend} className="w-full bg-teal-600 p-3 rounded font-bold hover:bg-teal-700">Add to Chat</button></div></div>}
+
+            {/* Add Friend Modal */}
+            {addFriendModal && <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4"><div className="bg-app-panel p-6 rounded-xl w-full max-w-sm relative"><button onClick={()=>setAddFriendModal(false)} className="absolute top-3 right-3"><Icon name="x" size={24}/></button><h3 className="text-lg font-bold mb-4">Add New Contact</h3><input value={friendPhone} onChange={e=>setFriendPhone(e.target.value)} placeholder="Enter Phone Number" className="w-full bg-gray-700 p-3 rounded mb-4 outline-none" type="tel"/><button onClick={handleAddFriend} className="w-full bg-teal-600 p-3 rounded font-bold hover:bg-teal-700">Add to Chat</button></div></div>}
 
             <div className={`${activeChat?'hidden md:flex':'flex'} w-full md:w-[400px] flex-col border-r border-gray-700 bg-app-dark h-full z-10`}>
                 <div className="h-16 bg-app-panel flex items-center justify-between px-4 shrink-0">

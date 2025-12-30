@@ -48,7 +48,10 @@ const usePeer = (userPhone, onData, onConn, onCall, onError) => {
         p.on('open', (id) => { setMyPeerId(id); setStatus("Online"); });
         p.on('connection', (c) => setupConn(c));
         p.on('call', (c) => onCall && onCall(c));
-        p.on('error', (e) => { setStatus(e.type === 'unavailable-id' ? "ID Taken" : "Error"); if(onError) onError(e.type); });
+        p.on('error', (e) => { 
+            setStatus(e.type === 'unavailable-id' ? "ID Taken" : "Error"); 
+            if(onError) onError(e.type); 
+        });
         p.on('disconnected', () => { setStatus("Reconnecting..."); p.reconnect(); });
         peerRef.current = p;
         const interval = setInterval(() => Object.values(connRef.current).forEach(c => c.open && c.send({type:'ping'})), 5000);
@@ -69,7 +72,7 @@ const usePeer = (userPhone, onData, onConn, onCall, onError) => {
     return { myPeerId, connect, send, call, status };
 };
 
-// --- Login Screen (FIXED URL) ---
+// --- Login Screen (FIXED URL RELATIVE) ---
 const LoginScreen = ({ onLogin }) => {
     const [step, setStep] = useState(1);
     const [phone, setPhone] = useState("");
@@ -79,16 +82,17 @@ const LoginScreen = ({ onLogin }) => {
 
     const apiRequest = async (endpoint, body) => {
         try {
-            // FIX: Using 127.0.0.1 is more reliable on Windows than localhost
-            const res = await fetch(`http://127.0.0.1:5000/api/${endpoint}`, {
+            // FIX: Using relative path works perfectly when served from same server
+            const res = await fetch(`/api/${endpoint}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             });
+            if (!res.ok) throw new Error("Server Error");
             return await res.json();
         } catch(e) {
             console.error(e);
-            return { success: false, message: "SERVER ERROR: Is node server.js running?" };
+            return { success: false, message: "Connection Failed. Is server running?" };
         }
     };
 
@@ -101,7 +105,7 @@ const LoginScreen = ({ onLogin }) => {
         
         if(data.success) {
             setStep(2);
-            alert("OTP Sent! Check the Black Terminal/CMD Screen.");
+            alert("OTP Sent! Check the Black Server Console.");
         } else {
             setErrorMsg(data.message);
         }
@@ -131,7 +135,7 @@ const LoginScreen = ({ onLogin }) => {
                 {step === 1 ? (
                     <>
                         <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Mobile Number" className="w-full bg-gray-700 border border-gray-600 p-3 rounded mb-4 focus:border-teal-500 outline-none" type="tel" />
-                        <button onClick={handleSendOTP} disabled={loading} className="w-full bg-teal-600 hover:bg-teal-700 py-3 rounded font-bold transition">{loading ? "Connecting to Server..." : "Get OTP"}</button>
+                        <button onClick={handleSendOTP} disabled={loading} className="w-full bg-teal-600 hover:bg-teal-700 py-3 rounded font-bold transition">{loading ? "Connecting..." : "Get OTP"}</button>
                     </>
                 ) : (
                     <>
